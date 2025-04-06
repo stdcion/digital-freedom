@@ -1,0 +1,201 @@
+#!/bin/sh
+
+GITHUB_RAW_URL="https://raw.githubusercontent.com/itdoginfo/allow-domains/main"
+SUBNETS_DISCORD="${GITHUB_RAW_URL}/Subnets/IPv4/discord.lst"
+SUBNETS_TWITTER="${GITHUB_RAW_URL}/Subnets/IPv4/twitter.lst"
+SUBNETS_META="${GITHUB_RAW_URL}/Subnets/IPv4/meta.lst"
+TPROXY_MARK="0x1"
+TPROXY_L4PROTO="{ tcp, udp }"
+TPROXY_PORT="1600"
+FAKEIP="{ 198.18.0.0/15 }"
+TABLE="proxy_table"
+IP_TABLE="100"
+IP_PRIORITY="100"
+SUBNET="proxy_subnets"
+DISCORD_SUBNET="proxy_discord_subnets"
+SRC_INTERFACE="br-lan"
+
+wait_wan() {
+    local attempts=0
+    local max_attempts=20
+
+    while [ $attempts -lt $max_attempts ]; do
+        if ping -c 1 github.com >/dev/null 2>&1; then
+            return
+        fi
+        attempts=$((attempts+1))
+        sleep 1
+    done
+}
+
+download_subnet() {
+    local service="$1"
+    case "$service" in
+        "discord")
+            URL=$SUBNETS_DISCORD
+            nft add set inet $TABLE $DISCORD_SUBNET { type ipv4_addr\; flags interval\; auto-merge\; }
+            nft add rule inet $TABLE mangle iifname "$SRC_INTERFACE" ip daddr @$DISCORD_SUBNET udp dport { 50000-65535 } meta mark set $TPROXY_MARK counter
+            ;;
+        "twitter")
+            URL=$SUBNETS_TWITTER
+            ;;
+        "meta")
+            URL=$SUBNETS_META
+            ;;
+        *)
+            return
+            ;;
+    esac
+
+    local filename=$(basename "$URL")
+    wget -O "/tmp/$filename" "$URL"
+
+    while IFS= read -r subnet; do
+        if [ "$service" = "discord" ]; then
+            nft add element inet $TABLE $DISCORD_SUBNET { $subnet }
+        else
+            nft add element inet $TABLE $SUBNET { $subnet }
+        fi
+    done <"/tmp/$filename"
+}
+
+enable_routing() {
+    if nft list table inet $TABLE >/dev/null 2>&1; then
+        return
+    fi
+
+    nft add table inet $TABLE
+    nft add chain inet $TABLE mangle { type filter hook prerouting priority -150 \; policy accept \;}
+    nft add chain inet $TABLE proxy { type filter hook prerouting priority -100 \; policy accept \;}
+    nft add set inet $TABLE $SUBNET { type ipv4_addr\; flags interval\; auto-merge\; }
+    nft add rule inet $TABLE mangle iifname "$SRC_INTERFACE" ip daddr @$SUBNET meta l4proto $TPROXY_L4PROTO meta mark set $TPROXY_MARK counter
+    nft add rule inet $TABLE mangle iifname "$SRC_INTERFACE" ip daddr "$FAKEIP" meta l4proto $TPROXY_L4PROTO meta mark set $TPROXY_MARK counter
+    nft add rule inet $TABLE proxy meta mark $TPROXY_MARK meta l4proto $TPROXY_L4PROTO tproxy ip to :$TPROXY_PORT counter
+
+    download_subnet discord
+    download_subnet twitter
+    download_subnet meta
+
+    ip rule add fwmark $TPROXY_MARK lookup $IP_TABLE priority $IP_PRIORITY
+    ip route add local default dev lo table $IP_TABLE
+}
+
+disable_routing() {
+    if ! nft list table inet $TABLE >/dev/null 2>&1; then
+        return
+    fi
+
+    nft delete table inet $TABLE
+
+    ip rule del priority $IP_PRIORITY
+    ip route del default table $IP_TABLE
+}
+
+enable_fake_dhcp() {
+    local current_noresolv=$(uci -q get dhcp.@dnsmasq[0].noresolv)
+    if [ "$current_noresolv" = "1" ]; then
+        return
+    fi
+    
+    uci set dhcp.@dnsmasq[0].filter_aaaa='1'
+    uci set dhcp.@dnsmasq[0].noresolv='1'
+    uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'
+    uci commit dhcp
+}
+
+disable_fake_dhcp() {
+    local current_noresolv=$(uci -q get dhcp.@dnsmasq[0].noresolv)
+    if [ "$current_noresolv" = "0" ]; then
+        return
+    fi
+
+    uci set dhcp.@dnsmasq[0].noresolv='0'
+    uci delete dhcp.@dnsmasq[0].server
+    uci commit dhcp
+}
+
+enable_sing_box() {
+    uci set sing-box.main.enabled='1'
+    uci set sing-box.main.user='root'
+    uci commit sing-box
+}
+
+disable_sing_box() {
+    uci set sing-box.main.enabled='0'
+    uci commit sing-box
+}
+
+init() {
+    local enabled=$(uci get sing-box.main.enabled 2>/dev/null)
+    if [ "$enabled" = "1" ]; then
+        disable_fake_dhcp
+        service dnsmasq restart
+        sleep 5
+        service sysntpd restart
+        wait_wan
+        start
+    fi
+}
+
+start() {
+    enable_sing_box
+    enable_fake_dhcp
+    enable_routing
+    sync
+
+    service dnsmasq restart
+    service sing-box start
+    echo 1 > /sys/class/leds/blue:mesh/brightness
+}
+
+stop() {
+    disable_routing
+    disable_fake_dhcp
+    disable_sing_box
+    sync
+    
+    service dnsmasq restart
+    service sing-box stop 2>/dev/null
+    echo 0 > /sys/class/leds/blue:mesh/brightness
+}
+
+restart() {
+    stop
+    sleep 10
+    start
+}
+
+toggle() {
+    echo 10 > /sys/class/leds/blue:mesh/delay_on
+    echo 10 > /sys/class/leds/blue:mesh/delay_off
+    echo timer > /sys/class/leds/blue:mesh/trigger
+    local enabled=$(uci get sing-box.main.enabled 2>/dev/null)
+    if [ "$enabled" = "1" ]; then
+        stop
+    elif [ "$enabled" = "0" ]; then
+        start
+    fi
+    reboot
+}
+
+case "$1" in
+    init)
+        init
+        ;;
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        restart
+        ;;
+    toggle)
+        toggle
+        ;;    
+    *)
+        echo "Usage: $0 {start|stop|restart|toggle}"
+        exit 1
+        ;;
+esac

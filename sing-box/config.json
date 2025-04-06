@@ -1,0 +1,342 @@
+{
+    "log": {
+        "level": "warn"
+    },
+    "dns": {
+        "strategy": "ipv4_only",
+        "fakeip": {
+            "enabled": true,
+            "inet4_range": "198.18.0.0/15"
+        },
+        "servers": [
+            {
+                "tag": "google-doh-server",
+                "address": "https://8.8.8.8/dns-query",
+                "detour": "direct-out",
+                "address_resolver": "resolver"
+            },
+            {
+                "tag": "resolver",
+                "address": "8.8.8.8"
+            },
+            {
+                "tag": "fakeip-server",
+                "address": "fakeip"
+            }
+        ],
+        "rules": [
+            {
+                "query_type": [
+                    "HTTPS"
+                ],
+                "action": "reject"
+            },
+            {
+                "domain_suffix": [
+                    "use-application-dns.net"
+                ],
+                "action": "reject"
+            },
+            {
+                "server": "fakeip-server",
+                "domain": "fakeip.tech-domain.club",
+                "rewrite_ttl": 60,
+                "domain_suffix": [
+                    "ifconfig.me"
+                ],
+                "rule_set": [
+                    "geoblock",
+                    "block",
+                    "porn",
+                    "news",
+                    "anime",
+                    "youtube",
+                    "discord",
+                    "meta",
+                    "twitter",
+                    "hdrezka",
+                    "tiktok",
+                    "personal"
+                ]
+            }
+        ]
+    },
+    "inbounds": [
+        {
+            "tag": "dns-in",
+            "type": "direct",
+            "listen": "127.0.0.1",
+            "listen_port": 5353
+        },
+        {
+            "tag": "tproxy-targeted-in",
+            "type": "tproxy",
+            "listen": "::",
+            "listen_port": 1600,
+            "tcp_fast_open": true,
+            "udp_fragment": true
+        },
+        {
+            "tag": "tproxy-nl-passthrough-in",
+            "type": "tproxy",
+            "listen": "::",
+            "listen_port": 1601,
+            "tcp_fast_open": true,
+            "udp_fragment": true
+        },
+        {
+            "tag": "tproxy-ru-passthrough-in",
+            "type": "tproxy",
+            "listen": "::",
+            "listen_port": 1602,
+            "tcp_fast_open": true,
+            "udp_fragment": true,
+            "sniff": false
+        },
+        {
+            "tag": "socks-nl-in",
+            "type": "socks",
+            "listen": "::",
+            "listen_port": 2080,
+            "tcp_fast_open": true,
+            "udp_fragment": true
+        },
+        {
+            "tag": "socks-ru-in",
+            "type": "socks",
+            "listen": "::",
+            "listen_port": 2081,
+            "tcp_fast_open": true,
+            "udp_fragment": true
+        }
+    ],
+    "outbounds": [
+        {
+            "tag": "direct-out",
+            "type": "direct"
+        },
+        {
+            "tag": "vless-nl-out",
+            "type": "vless",
+            "server": "$SERVER_IP",
+            "server_port": "$SERVER_PORT",
+            "uuid": "$UUID",
+            "packet_encoding": "xudp",
+            "domain_strategy": "",
+            "flow": "xtls-rprx-vision",
+            "tls": {
+                "enabled": true,
+                "server_name": "$SNI",
+                "utls": {
+                    "enabled": true,
+                    "fingerprint": "chrome"
+                },
+                "insecure": false,
+                "reality": {
+                    "enabled": true,
+                    "public_key": "$PUBLIC_KEY",
+                    "short_id": "$SHORT_ID"
+                }
+            }
+        },
+        {
+            "tag": "vless-ru-out",
+            "type": "vless",
+            "server": "$SERVER_IP",
+            "server_port": "$SERVER_PORT",
+            "uuid": "$UUID",
+            "packet_encoding": "xudp",
+            "domain_strategy": "",
+            "flow": "xtls-rprx-vision",
+            "tls": {
+                "enabled": true,
+                "server_name": "$SNI",
+                "utls": {
+                    "enabled": true,
+                    "fingerprint": "chrome"
+                },
+                "insecure": false,
+                "reality": {
+                    "enabled": true,
+                    "public_key": "$PUBLIC_KEY",
+                    "short_id": "$SHORT_ID"
+                }
+            }
+        }
+    ],
+    "route": {
+        "rules": [
+            {
+                "inbound": [
+                    "dns-in",
+                    "tproxy-targeted-in",
+                    "tproxy-nl-passthrough-in",
+                    "tproxy-ru-passthrough-in"
+                ],
+                "action": "sniff"
+            },
+            {
+                "protocol": "dns",
+                "action": "hijack-dns"
+            },
+            {
+                "protocol": "quic",
+                "action": "reject"
+            },
+            {
+                "domain": "fakeip.tech-domain.club",
+                "action": "route-options",
+                "override_port": 8443
+            },
+            {
+                "inbound": [
+                    "tproxy-targeted-in"
+                ],
+                "domain_suffix": [
+                    "ifconfig.me"
+                ],
+                "rule_set": [
+                    "geoblock",
+                    "block",
+                    "porn",
+                    "news",
+                    "anime",
+                    "meta",
+                    "twitter",
+                    "hdrezka",
+                    "tiktok",
+                    "personal"
+                ],
+                "outbound": "vless-nl-out"
+            },
+            {
+                "inbound": [
+                    "tproxy-targeted-in"
+                ],
+                "rule_set": [
+                    "youtube",
+                    "discord"
+                ],
+                "outbound": "vless-ru-out"
+            },
+            {
+                "inbound": [
+                    "tproxy-nl-passthrough-in"
+                ],
+                "outbound": "vless-nl-out"
+            },
+            {
+                "inbound": [
+                    "tproxy-ru-passthrough-in"
+                ],
+                "outbound": "vless-ru-out"
+            },
+            {
+                "inbound": [
+                    "socks-nl-in"
+                ],
+                "outbound": "vless-nl-out"
+            },
+            {
+                "inbound": [
+                    "socks-ru-in"
+                ],
+                "outbound": "vless-ru-out"
+            }
+        ],
+        "auto_detect_interface": true,
+        "rule_set": [
+            {
+                "tag": "geoblock",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://github.com/itdoginfo/allow-domains/releases/latest/download/geoblock.srs",
+                "update_interval": "1d"
+            },
+            {
+                "tag": "block",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://github.com/itdoginfo/allow-domains/releases/latest/download/block.srs",
+                "update_interval": "1d"
+            },
+            {
+                "tag": "porn",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://github.com/itdoginfo/allow-domains/releases/latest/download/porn.srs",
+                "update_interval": "1d"
+            },
+            {
+                "tag": "news",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://github.com/itdoginfo/allow-domains/releases/latest/download/news.srs",
+                "update_interval": "1d"
+            },
+            {
+                "tag": "anime",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://github.com/itdoginfo/allow-domains/releases/latest/download/anime.srs",
+                "update_interval": "1d"
+            },
+            {
+                "tag": "youtube",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://github.com/itdoginfo/allow-domains/releases/latest/download/youtube.srs",
+                "update_interval": "1d"
+            },
+            {
+                "tag": "discord",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://github.com/itdoginfo/allow-domains/releases/latest/download/discord.srs",
+                "update_interval": "1d"
+            },
+            {
+                "tag": "meta",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://github.com/itdoginfo/allow-domains/releases/latest/download/meta.srs",
+                "update_interval": "1d"
+            },
+            {
+                "tag": "twitter",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://github.com/itdoginfo/allow-domains/releases/latest/download/twitter.srs",
+                "update_interval": "1d"
+            },
+            {
+                "tag": "hdrezka",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://github.com/itdoginfo/allow-domains/releases/latest/download/hdrezka.srs",
+                "update_interval": "1d"
+            },
+            {
+                "tag": "tiktok",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://github.com/itdoginfo/allow-domains/releases/latest/download/tiktok.srs",
+                "update_interval": "1d"
+            },
+            {
+                "tag": "personal",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://github.com/stdcion/digital-freedom/releases/latest/download/personal.srs",
+                "update_interval": "1d"
+            }
+        ]
+    },
+    "experimental": {
+        "cache_file": {
+            "enabled": true,
+            "store_fakeip": true,
+            "path": "/tmp/dns-cache.db"
+        }
+    }
+}
