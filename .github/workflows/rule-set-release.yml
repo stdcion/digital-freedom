@@ -1,0 +1,45 @@
+name: Compile and Release Rule Set
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write 
+
+jobs:
+  rule-set-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Setup Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.24.1'
+        cache: false
+        
+    - name: Convert Domains to JSON
+      run: |
+        go run sing-box-domain-converter/main.go domains/personal.lst
+      
+    - name: Compile Rule Set
+      run: |
+        docker run --rm \
+          -v $(pwd)/domains:/app \
+          -w /app \
+          ghcr.io/sagernet/sing-box:v1.11.6 \
+          rule-set compile personal.json -o personal.srs
+
+    - name: Set Release Tag
+      run: echo "TAG_NAME=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_ENV
+
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      with:
+        body: "update rule-set"
+        files: domains/*.srs
+        tag_name: ${{ env.TAG_NAME }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
